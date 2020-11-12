@@ -16,7 +16,7 @@ model_dir = address[deck]
 summary_cmd = '/home/ducbueno/Tools/opm/opm-common/build/bin/summary'
 dirs = [model_dir + '/', model_dir + '/opm-simulation-reference/flow_legacy/']
 mode = ['gpu', 'reference']
-opts = [b'WBHP', b'WOPR', b'WGPR', b'WWPR']
+opts = ['WBHP', 'WOPR', 'WGPR', 'WWPR']
 
 if os.path.isdir('data'):
     shutil.rmtree('data')
@@ -30,24 +30,23 @@ count = 0
 for d in dirs:
     process = Popen([summary_cmd, '-l', d + deck], stdout=PIPE, stderr=PIPE)
     output = process.stdout.read().split()
+    output = [val.decode('ascii') for val in output]
 
-    filtered_output = list(filter(lambda x: b'WBHP' in x, output))
-    filtered_output = list(filter(lambda x: b'WBHPH' not in x, filtered_output))
-    wells = [val.split(b':')[-1] for val in filtered_output]
+    filtered_output = list(filter(lambda x: 'WBHP' in x, output))
+    filtered_output = list(filter(lambda x: 'WBHPH' not in x, filtered_output))
+    wells = [val.split(':')[-1] for val in filtered_output]
     if not wells:
-        wells = [val.split(b':')[-1] for val in output]
+        wells = [val.split(':')[-1] for val in output]
         wells = list(dict.fromkeys(wells))
 
     try:
-        available_opts = [val.split(b':')[0] for val in output]
+        available_opts = [val.split(':')[0] for val in output]
         opts = list(set(available_opts).intersection(set(opts)))
     except NameError:
-        opts = [val.split(b':')[0] for val in output]
+        opts = [val.split(':')[0] for val in output]
 
     for well in wells:
-        well = well.decode('ascii')
         for opt in opts:
-            opt = opt.decode('ascii')
             fname = mode[count] + '-' + opt + '-' + well + '.dat'
             wellopt = opt + ':' + well
             output_file = open('data/' + fname, 'w')
@@ -67,24 +66,29 @@ for f in files:
 
     for m in mode:
         with open('data/' + m + '-' + f, 'r') as wdata:
-            next(wdata)
-            time = []
-            vals = []
+            file_data = wdata.readlines()
+            file_data = [item.split() for item in file_data]
 
             try:
-                for line in wdata:
-                    l = line.split()
-                    time.append(float(l[0]))
-                    vals.append(float(l[1]))
-            except ValueError as e:
-                pass
+                time = [item[0] for item in file_data if len(item) > 0]
+                time = [float(item) for item in time[1:]]
+                vals = [item[1] for item in file_data if len(item) > 0]
+                vals = [float(item) for item in vals[1:]]
 
-            if vals:
                 if m == 'reference':
                     plt.plot(time, vals, '--', label=m)
                 else:
                     plt.plot(time, vals, label=m)
 
-    plt.legend(loc='upper right')
-    plt.savefig('plots/{}-{}.png'.format(opt, well))
-    plt.clf()
+                valid_vals = True;
+
+            except ValueError as e:
+                valid_vals = False;
+                pass
+
+    if(valid_vals):
+        plt.legend(loc='upper right')
+        plt.savefig('plots/{}-{}.png'.format(opt, well))
+        plt.clf()
+
+shutil.rmtree('data')

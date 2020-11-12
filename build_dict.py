@@ -4,6 +4,10 @@ import os
 
 models_dir = '/home/ducbueno/Tools/opm/opm-tests/'
 models = [f.path for f in os.scandir(models_dir) if f.is_dir()]
+
+if os.path.exists('decks.dict'):
+    os.remove('decks.dict')
+
 dict_file = open('decks.dict', 'a')
 dict_file.write('{')
 
