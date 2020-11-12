@@ -1,84 +1,115 @@
 #!/usr/bin/env python3
 
 import os
-import ast
 import sys
 import shutil
+import subprocess
 import matplotlib.pyplot as plt
-from subprocess import Popen, PIPE, call
 
-dict_file = open('decks.dict', 'r')
-content = dict_file.read()
-address = ast.literal_eval(content)
+#-------------------------------------------------------------------------------
 
-deck = sys.argv[1]
-model_dir = address[deck]
-summary_cmd = '/home/ducbueno/Tools/opm/opm-common/build/bin/summary'
-dirs = [model_dir + '/', model_dir + '/opm-simulation-reference/flow_legacy/']
-mode = ['gpu', 'reference']
-opts = ['WBHP', 'WOPR', 'WGPR', 'WWPR']
+def parse_summary(summary, opts):
+    filtered_summary = list(filter(lambda x: 'WBHP' in x, summary))
+    filtered_summary = list(filter(lambda x: 'WBHPH' not in x, filtered_summary))
 
-if os.path.isdir('data'):
-    shutil.rmtree('data')
-os.mkdir('data')
-
-if os.path.isdir('plots'):
-    shutil.rmtree('plots')
-os.mkdir('plots')
-
-count = 0
-for d in dirs:
-    process = Popen([summary_cmd, '-l', d + deck], stdout=PIPE, stderr=PIPE)
-    output = process.stdout.read().split()
-    output = [val.decode('ascii') for val in output]
-
-    filtered_output = list(filter(lambda x: 'WBHP' in x, output))
-    filtered_output = list(filter(lambda x: 'WBHPH' not in x, filtered_output))
-    wells = [val.split(':')[-1] for val in filtered_output]
+    wells = [entry.split(':')[-1] for entry in filtered_summary]
     if not wells:
-        wells = [val.split(':')[-1] for val in output]
+        wells = [entry.split(':')[-1] for entry in summary]
         wells = list(dict.fromkeys(wells))
 
     try:
-        available_opts = [val.split(':')[0] for val in output]
+        available_opts = [entry.split(':')[0] for entry in summary]
         opts = list(set(available_opts).intersection(set(opts)))
     except NameError:
         opts = [val.split(':')[0] for val in output]
 
+    return wells, opts
+
+
+def write_wells(wells, opts, stype, summary_cmd, deck):
+    if not os.path.isdir('data'):
+        os.mkdir('data')
+
     for well in wells:
         for opt in opts:
-            fname = mode[count] + '-' + opt + '-' + well + '.dat'
+            fname = stype + '-' + opt + '-' + well + '.dat'
             wellopt = opt + ':' + well
             output_file = open('data/' + fname, 'w')
-            call([summary_cmd, d + deck, 'TIME', wellopt], stdout=output_file)
+            subprocess.call([summary_cmd, deck, 'TIME', wellopt], stdout=output_file)
             output_file.close()
 
-    count = count + 1
+#-------------------------------------------------------------------------------
 
-files = os.listdir('data')
-files = [f.split('-', 1)[-1] for f in files]
-files = list(dict.fromkeys(files))
-for f in files:
-    opt, well = f.strip('.dat').split('-', 1)
+summary_cmd = '/home/ducbueno/Tools/opm/opm-common/build/bin/summary'
+deck = sys.argv[1]
+opts = ['WBHP', 'WOPR', 'WGPR', 'WWPR']
+
+try:
+    summary = subprocess.check_output([summary_cmd, '-l', deck], stderr=subprocess.STDOUT).decode().split()
+    wells, opts = parse_summary(summary, opts)
+    write_wells(wells, opts, 'mysim', summary_cmd, deck)
+except subprocess.CalledProcessError:
+    print("Couldn't find deck {} \nExiting...".format(deck))
+    sys.exit(1)
+
+if len(sys.argv) > 2:
+    try:
+        deck_path = '/'.join(deck.split('/')[:-1])
+        reference_prog = sys.argv[2].split('--reference=')[-1]
+        if(reference_prog == 'flow'):
+            reference_path = deck_path + '/opm-simulation-reference/flow_legacy/'
+        elif(reference_prog == 'eclipse'):
+            reference_path = deck_path + '/eclipse-simulation/'
+        else:
+            print("Invalid reference program. Valid options for --reference are \'flow\' and \'eclipse\'.")
+            sys.exit(1)
+
+        deck_name = deck.split('/')[-1]
+        reference_deck = reference_path + deck_name
+        summary_reference = subprocess.check_output([summary_cmd, '-l', reference_deck], stderr=subprocess.STDOUT).decode().split()
+        wells, opts = parse_summary(summary_reference, opts)
+        write_wells(wells, opts, 'reference', summary_cmd, reference_deck)
+    except subprocess.CalledProcessError:
+        print("Couldn't find deck {} in {} \nExiting...".format(deck_name, reference_path))
+        sys.exit(1)
+
+#-------------------------------------------------------------------------------
+
+if not os.path.isdir('plots'):
+    os.mkdir('plots')
+
+if os.path.isdir('plots/' + deck_name):
+    shutil.rmtree('plots/' + deck_name)
+os.mkdir('plots/' + deck_name)
+
+available_summaries = os.listdir('data')
+summaries = list(dict.fromkeys([s.split('-', 1)[-1] for s in available_summaries]))
+stypes = list(dict.fromkeys([s.split('-', 1)[0] for s in available_summaries]))
+
+for s in summaries:
+    opt, well = s.strip('.dat').split('-', 1)
     plt.xlabel('Time')
     plt.ylabel('{}'.format(opt))
     plt.title('Well: {}'.format(well))
 
-    for m in mode:
-        with open('data/' + m + '-' + f, 'r') as wdata:
-            file_data = wdata.readlines()
-            file_data = [item.split() for item in file_data]
+    for t in stypes:
+        with open('data/' + t + '-' + s, 'r') as scontent:
+            sdata = scontent.readlines()
+            sdata = [item.split() for item in sdata]
 
             try:
-                time = [item[0] for item in file_data if len(item) > 0]
+                time = [item[0] for item in sdata if len(item) > 0]
                 time = [float(item) for item in time[1:]]
-                vals = [item[1] for item in file_data if len(item) > 0]
+                vals = [item[1] for item in sdata if len(item) > 0]
                 vals = [float(item) for item in vals[1:]]
 
-                if m == 'reference':
-                    plt.plot(time, vals, '--', label=m)
+                if t == 'reference':
+                    plt.plot(time, vals, label=t)
                 else:
-                    plt.plot(time, vals, label=m)
+                    if(len(stypes) > 1):
+                        plt.plot(time, vals, '--', label=t)
+                    else:
+                        plt.plot(time, vals, label=t)
 
                 valid_vals = True;
 
@@ -88,7 +119,7 @@ for f in files:
 
     if(valid_vals):
         plt.legend(loc='upper right')
-        plt.savefig('plots/{}-{}.png'.format(opt, well))
+        plt.savefig('plots/' + deck_name + '/{}-{}.png'.format(opt, well))
         plt.clf()
 
 shutil.rmtree('data')
